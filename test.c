@@ -1,4 +1,5 @@
 //#include <stdint.h>
+#include <machine/_bus.h>
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/systm.h>
@@ -25,6 +26,8 @@ struct test_softc {
   struct cdev *test_cdev;
   int barid[6];
   struct resource *barres[6];
+  struct bus_space_tag_t bustag[6];
+  struct bus_space_handle_t bushandle[6];
   uint16_t vid;
   uint16_t pid;
 };
@@ -116,6 +119,20 @@ static int test_attach(device_t dev){
   sc = device_get_softc(dev);
   sc->vid = 0x14e4;
   sc->pid = 0x4331;
+
+  for (int i = 0; i < 6; i++) {
+    sc->barid[i] = PCIR_BAR(i);
+    sc->barres[i] = bus_alloc_resource(dev, SYS_RES_MEMORY, &sc->barid[i],
+				       0,~0,1, RF_ACTIVE);
+    if(sc->barres[i] == NULL){
+      printf("Bar resource %d Memory Failed to be Allocated\n", i);
+      return (ENXIO);
+    }
+
+    sc->bustag[i] = rman_get_bustag(sc->barres[i]);
+    sc->bushandle[i] = rman_get_bushandle(sc->barres[i]);
+      
+  }
   sc->testdev = dev;
 
   /*

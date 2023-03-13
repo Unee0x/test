@@ -1,5 +1,3 @@
-//#include <stdint.h>
-#include <machine/_bus.h>
 #include <sys/param.h>
 #include <sys/module.h>
 #include <sys/systm.h>
@@ -17,6 +15,7 @@
 
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
+#include <x86/bus.h>
 
 
 typedef struct test_softc *test;
@@ -24,10 +23,13 @@ typedef struct test_softc *test;
 struct test_softc {
   device_t testdev;
   struct cdev *test_cdev;
-  int barid[6];
-  struct resource *barres[6];
-  struct bus_space_tag_t bustag[6];
-  struct bus_space_handle_t bushandle[6];
+  int barid;
+  struct resource *barres;
+  bus_space_tag_t bustag;
+  bus_space_handle_t bushandle;
+  void *virtmem;
+  u_long physmem;
+  size_t sz;
   uint16_t vid;
   uint16_t pid;
 };
@@ -68,7 +70,8 @@ int test_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
   return (0);
 }
 
-int test_close(struct cdev *dev, int fflags, int devtype, struct thread *td)                                  {
+int test_close(struct cdev *dev, int fflags, int devtype, struct thread *td)
+{
   struct test_softc *sc;
 
   sc = dev->si_drv1;                                                                                          
@@ -82,6 +85,7 @@ int test_read(struct cdev *dev, struct uio *uio, int ioflag)
 
   sc = dev->si_drv1;
   device_printf(sc->testdev, "Asked to read %zd bytes.\n", uio->uio_resid);
+  
   return (0);
 }
 
@@ -96,14 +100,17 @@ int test_write(struct cdev *dev, struct uio *uio, int ioflag)
 
 
 static int test_probe(device_t dev){
+  printf("*************PROBING****************\n");
 
-  device_printf(dev, "Test Probe\nVendor ID : 0x%X\nDevice ID : 0x%X\n",
-		pci_get_vendor(dev), pci_get_device(dev));
+  uint16_t vid = pci_get_vendor(dev);
+  uint16_t did = pci_get_device(dev);
+  printf("Test Probe\nVendor ID : 0x%x\nDevice ID : 0x%x\n",vid,did);
 
-  if(pci_get_vendor(dev) == 0x14e4 && pci_get_device(dev) == 0x4331){
-    printf("Probe Function found The Broadcom Wifi pci_card BCM4331.\n");
-    device_set_desc(dev, "bcm4331");
-    return (BUS_PROBE_DEFAULT);
+  if(pci_get_vendor(dev) == 0x14e4 && pci_get_device(dev) == 0x43a0){
+	printf("Probe Function found The Broadcom Wifi pci_card BCM43A0.\n");
+	device_set_desc(dev, "bcm43a0");
+        return (BUS_PROBE_DEFAULT);
+	// }
   }
   return (ENXIO);
 }
@@ -118,21 +125,30 @@ static int test_attach(device_t dev){
 
   sc = device_get_softc(dev);
   sc->vid = 0x14e4;
-  sc->pid = 0x4331;
+  sc->pid = 0x43a0;
 
-  for (int i = 0; i < 6; i++) {
-    sc->barid[i] = PCIR_BAR(i);
-    sc->barres[i] = bus_alloc_resource(dev, SYS_RES_MEMORY, &sc->barid[i],
+  
+  
+  sc->barid = PCIR_BAR(0);
+  sc->barres = bus_alloc_resource(dev, SYS_RES_MEMORY, &sc->barid,
 				       0,~0,1, RF_ACTIVE);
-    if(sc->barres[i] == NULL){
-      printf("Bar resource %d Memory Failed to be Allocated\n", i);
+    if(sc->barres == NULL){
+      printf("Bar resource Memory Failed to be Allocated\n");
       return (ENXIO);
     }
+    device_printf(dev, "The Base Address Resource is at %p\n", sc->barres);
 
-    sc->bustag[i] = rman_get_bustag(sc->barres[i]);
-    sc->bushandle[i] = rman_get_bushandle(sc->barres[i]);
-      
-  }
+    //   sc->testdev = dev;
+   sc->bustag = rman_get_bustag(sc->barres);
+   device_printf(dev,"Bus Tag is %lu\n", sc->bustag);
+   sc->bushandle = rman_get_bushandle(sc->barres);
+   device_printf(dev,"Bus Handle is %lu\n", sc->bushandle);
+   sc->virtmem = rman_get_virtual(sc->barres);
+   device_printf(dev, "Virt Memory is at %p\n", sc->virtmem);
+   sc->physmem = rman_get_start(sc->barres);
+   device_printf(dev, "Physical Memory starts at %lu\n" , sc->physmem);
+   sc->sz = rman_get_size(sc->barres);
+   device_printf(dev, "Size of Memory is %lu\n", sc->sz);
   sc->testdev = dev;
 
   /*
@@ -176,6 +192,14 @@ static int test_suspend(device_t dev){
 static int test_resume(device_t dev){
   printf("Test pci device resume\n");
   return (0);
+}
+
+static uint16_t dev_read(struct test_softc *sc, uint16_t addr){
+  return bus_space_read_8(sc->bustag, sc->bushandle, addr);
+}
+
+static void dev_write(struct test_softc *sc, uint16_t addr, uint16_t value){
+  bus_space_write_8(sc->bustag,sc->bushandle,addr, value);
 }
 
 static device_method_t test_methods[] = {
